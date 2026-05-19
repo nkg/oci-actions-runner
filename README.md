@@ -14,7 +14,7 @@ single job.
 | Base | `debian:13-slim` |
 | Init | `tini` (signal forwarding + zombie reaping) |
 | Runtime | bash, ca-certs, curl, dumb-init, git, jq, openssh-client, sudo |
-| Container CLI | `docker` (from Debian's `docker.io` package; talks to whatever docker-compat socket you mount) |
+| Container CLI | `docker-ce-cli` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
 | User | `runner` (uid 1001) |
 
@@ -99,21 +99,31 @@ submission; this image just runs the agent.
 
 ## Design notes
 
-### Docker CLI via Debian's `docker.io`
+### Docker CLI from Docker's upstream apt repo
 
-The `docker.io` Debian package bundles the engine + CLI (~80 MB on
-disk). We install it, but we never run dockerd — jobs that invoke
-`docker` talk to whatever socket we mount in (typically the host's
-podman socket under the dispatcher's job spec). The dockerd binary
-sitting unused on disk is ~50 MB of dead weight vs. the static-CLI
-alternative; we accept that to avoid the static-binary download URL
-flaking on CI networks.
+Image installs `docker-ce-cli` from Docker's official apt repo
+(`download.docker.com/linux/debian`) — CLI only, no daemon. Reasons:
 
-Socket-mount is faster + lighter than docker-in-docker. Trade-off:
-a compromised job can escape via the socket if the daemon has weak
-isolation. For the trust model this image targets (private orgs
-only, no public PR CI), that's acceptable; for stricter isolation
-needs, layer `sysbox` or run rootless docker inside the runner.
+- Canonical source; the binary is exactly what `docker` ships
+- Predictable install path (`/usr/bin/docker`, on PATH)
+- No dockerd binary in the image (~30 MB lighter than `docker.io`)
+- More reliable than the static binary at
+  `download.docker.com/linux/static/*` which flakes on Azure CI
+
+The repo is pinned to the `bookworm` (Debian 12) component because
+Docker's repo doesn't ship a `trixie` component yet — the CLI is
+pure Go and works across Debian versions.
+
+At runtime, the CLI talks to whatever socket the runtime mounts at
+`/var/run/docker.sock` (the dispatcher mounts the host's podman
+socket, which is docker-API-compatible). Socket-mount is faster +
+lighter than docker-in-docker.
+
+Trade-off: a compromised job can escape via the socket if the
+daemon has weak isolation. For the trust model this image targets
+(private orgs only, no public PR CI), that's acceptable; for
+stricter isolation needs, layer `sysbox` or run rootless docker
+inside the runner.
 
 ### `tini` for signal handling
 
