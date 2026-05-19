@@ -61,7 +61,12 @@ echo "[entrypoint] registering runner ${RUNNER_NAME} against ${RUNNER_URL}"
 
 # Graceful shutdown: on SIGTERM (Nomad kill, container stop), deregister
 # the runner so GitHub doesn't show a ghost offline runner.
-# shellcheck disable=SC2329  # invoked via `trap`, not a direct call
+#
+# Disable covers two rules fired on trap-invoked code:
+#   SC2329 — "function is never invoked" (called via trap)
+#   SC2317 — "command appears unreachable" (older linters raise this
+#            for every line inside; newer ones recognise the trap)
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   echo "[entrypoint] SIGTERM received — deregistering runner"
   ./config.sh remove --token "${RUNNER_TOKEN}" || true

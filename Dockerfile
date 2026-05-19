@@ -14,7 +14,6 @@
 FROM debian:13-slim AS builder
 
 ARG RUNNER_VERSION=2.328.0
-ARG DOCKER_CLI_VERSION=27.4.1
 ARG TARGETARCH=amd64
 
 RUN apt-get update \
@@ -33,29 +32,27 @@ RUN set -eux; \
       arm64) RUNNER_ARCH=arm64;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1;; \
     esac; \
-    curl -fsSL -o runner.tar.gz \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o runner.tar.gz \
       "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"; \
     mkdir -p /stage/runner; \
     tar -xzf runner.tar.gz -C /stage/runner; \
     rm runner.tar.gz
 
-# Docker CLI binary only (no dockerd). Jobs that `docker build` /
-# `docker run` against the mounted socket need just the client.
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) DOCKER_ARCH=x86_64;; \
-      arm64) DOCKER_ARCH=aarch64;; \
-      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1;; \
-    esac; \
-    curl -fsSL -o docker.tgz \
-      "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz"; \
-    tar -xzf docker.tgz; \
-    cp docker/docker /stage/docker; \
-    rm -rf docker docker.tgz
+# Docker CLI: installed from Docker's upstream apt repo in the final
+# stage. Tried docker.io (Debian's package) first — on trixie the
+# binary lands somewhere $PATH doesn't see, and the container-structure
+# tests couldn't exec it. Also tried the static binary from
+# download.docker.com — that URL flakes on Azure's CI network.
+# Docker's apt repo is reliable, canonical, and ships docker-ce-cli
+# as a separate package from the engine (no dockerd binary in the
+# image).
 
 # ─── Final image ────────────────────────────────────────────────────
 
 FROM debian:13-slim
+
+# Set pipefail so `curl ... | gpg --dearmor` failures propagate.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG RUNNER_VERSION=2.328.0
 LABEL org.opencontainers.image.title="oci-actions-runner"
@@ -71,11 +68,26 @@ LABEL org.opencontainers.image.version="${RUNNER_VERSION}"
 # `dumb-init` reaps zombies + forwards SIGTERM cleanly when the
 # runner exits — without it, the ephemeral cleanup hangs ~5s waiting
 # for the kernel to reap orphaned children.
+# Add Docker's apt repo + GPG key, then install all packages in one
+# shot. Repo codename pinned to `bookworm` (Debian 12) because
+# Docker's repo doesn't yet ship a `trixie` component as of writing;
+# the CLI binary works fine across Debian versions (pure Go).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      bash \
       ca-certificates \
       curl \
+      gnupg \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      https://download.docker.com/linux/debian/gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+ && chmod a+r /etc/apt/keyrings/docker.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
+      > /etc/apt/sources.list.d/docker.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash \
+      docker-ce-cli \
       dumb-init \
       git \
       jq \
@@ -90,10 +102,6 @@ RUN groupadd --gid 1001 runner \
  && useradd --uid 1001 --gid runner --shell /bin/bash --create-home runner \
  && mkdir -p /home/runner/_work \
  && chown -R runner:runner /home/runner
-
-# Docker CLI → /usr/local/bin (in PATH for all users).
-COPY --from=builder /stage/docker /usr/local/bin/docker
-RUN chmod 0755 /usr/local/bin/docker
 
 # Runner agent → /home/runner/runner (owned by runner uid).
 COPY --from=builder --chown=runner:runner /stage/runner /home/runner/runner
