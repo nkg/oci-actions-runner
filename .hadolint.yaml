@@ -1,0 +1,10 @@
+# hadolint config.
+#
+# Ignored rules:
+#   DL3008 — apt-get version pinning. We pin the Debian base tag
+#            (`debian:13-slim`) but let apt resolve current package
+#            versions so security updates roll in naturally. Pinning
+#            every package version would freeze CVEs into the image.
+
+ignored:
+  - DL3008

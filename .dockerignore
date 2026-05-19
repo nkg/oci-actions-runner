@@ -1,0 +1,9 @@
+.git
+.github
+*.md
+LICENSE
+.gitignore
+.dockerignore
+mise.toml
+lefthook.yml
+tests/

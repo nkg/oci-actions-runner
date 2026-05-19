@@ -1,0 +1,68 @@
+schemaVersion: 2.0.0
+
+# Verify the image's runtime contract — the things gha-nomad-dispatcher
+# and downstream operators assume are true when they spawn a container
+# from this image.
+
+commandTests:
+  - name: bash present
+    command: bash
+    args: ["--version"]
+    expectedOutput: ["GNU bash"]
+
+  - name: docker CLI on PATH
+    command: docker
+    args: ["--version"]
+    expectedOutput: ["Docker version"]
+
+  - name: git present (actions/checkout requirement)
+    command: git
+    args: ["--version"]
+    expectedOutput: ["git version"]
+
+  - name: jq present (used by most workflows)
+    command: jq
+    args: ["--version"]
+    expectedOutput: ["jq-"]
+
+  - name: openssh client present (checkout-over-SSH workflows)
+    command: ssh
+    args: ["-V"]
+    expectedError: ["OpenSSH"]
+
+  - name: tini is the init
+    command: /usr/bin/tini
+    args: ["--version"]
+    expectedOutput: ["tini version"]
+
+fileExistenceTests:
+  - name: entrypoint installed
+    path: /usr/local/bin/entrypoint.sh
+    shouldExist: true
+    permissions: -rwxr-xr-x
+
+  - name: runner agent installed
+    path: /home/runner/runner/config.sh
+    shouldExist: true
+
+  - name: runner agent run script installed
+    path: /home/runner/runner/run.sh
+    shouldExist: true
+
+  - name: work dir exists
+    path: /home/runner/_work
+    shouldExist: true
+    isExecutableBy: owner
+
+metadataTest:
+  user: "runner"
+  workdir: "/home/runner"
+  entrypoint:
+    - "/usr/bin/tini"
+    - "--"
+    - "/usr/local/bin/entrypoint.sh"
+  labels:
+    - key: "org.opencontainers.image.source"
+      value: "https://github.com/nkg/oci-actions-runner"
+    - key: "org.opencontainers.image.licenses"
+      value: "MIT"

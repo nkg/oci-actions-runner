@@ -1,0 +1,30 @@
+glob_matcher: doublestar
+
+pre-commit:
+  parallel: true
+  commands:
+    shellcheck:
+      glob: "**/*.sh"
+      run: shellcheck {staged_files}
+
+    hadolint:
+      glob: "Dockerfile*"
+      run: hadolint {staged_files}
+
+pre-push:
+  commands:
+    no-push-to-main:
+      run: |
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch" = "main" ]; then
+          echo "Direct push to main is not allowed. Use a branch and PR."
+          exit 1
+        fi
+        if [ -s "$LEFTHOOK_STDIN" ]; then
+          while read -r local_ref local_sha remote_ref remote_sha; do
+            if echo "$remote_ref" | grep -qE '^refs/heads/main$'; then
+              echo "Direct push to main is not allowed. Use a branch and PR."
+              exit 1
+            fi
+          done < "$LEFTHOOK_STDIN"
+        fi

@@ -1,0 +1,8 @@
+# Pinned local toolchain.
+#
+# Docker itself isn't pinned via mise — the build runs against the
+# host's docker / podman / nerdctl. CI uses ubuntu-latest's docker.
+[tools]
+shellcheck = "0"
+hadolint = "2"
+lefthook = "1"

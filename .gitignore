@@ -1,0 +1,11 @@
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local Docker build state
+.dockerignore.local
