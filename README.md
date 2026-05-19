@@ -14,7 +14,7 @@ single job.
 | Base | `debian:13-slim` |
 | Init | `tini` (signal forwarding + zombie reaping) |
 | Runtime | bash, ca-certs, curl, dumb-init, git, jq, openssh-client, sudo |
-| Container CLI | `docker` (static binary from docker.com, talks to whatever socket you mount) |
+| Container CLI | `docker` (from Debian's `docker.io` package; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
 | User | `runner` (uid 1001) |
 
@@ -99,13 +99,18 @@ submission; this image just runs the agent.
 
 ## Design notes
 
-### Docker CLI, not the engine
+### Docker CLI via Debian's `docker.io`
 
-We install only the docker client binary (~30 MB), not dockerd.
-Jobs that invoke `docker` talk to the socket we mount in. The
-socket-mount pattern is faster, lighter, and avoids the
-docker-in-docker / podman-in-podman complexity. Trade-off: a
-compromised job can escape via the socket if the daemon has weak
+The `docker.io` Debian package bundles the engine + CLI (~80 MB on
+disk). We install it, but we never run dockerd — jobs that invoke
+`docker` talk to whatever socket we mount in (typically the host's
+podman socket under the dispatcher's job spec). The dockerd binary
+sitting unused on disk is ~50 MB of dead weight vs. the static-CLI
+alternative; we accept that to avoid the static-binary download URL
+flaking on CI networks.
+
+Socket-mount is faster + lighter than docker-in-docker. Trade-off:
+a compromised job can escape via the socket if the daemon has weak
 isolation. For the trust model this image targets (private orgs
 only, no public PR CI), that's acceptable; for stricter isolation
 needs, layer `sysbox` or run rootless docker inside the runner.
