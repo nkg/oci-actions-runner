@@ -13,7 +13,7 @@
 
 FROM debian:13-slim AS builder
 
-ARG RUNNER_VERSION=2.328.0
+ARG RUNNER_VERSION=2.334.0
 ARG TARGETARCH=amd64
 
 RUN apt-get update \
@@ -54,7 +54,7 @@ FROM debian:13-slim
 # Set pipefail so `curl ... | gpg --dearmor` failures propagate.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG RUNNER_VERSION=2.328.0
+ARG RUNNER_VERSION=2.334.0
 LABEL org.opencontainers.image.title="oci-actions-runner"
 LABEL org.opencontainers.image.description="Minimal Debian + GitHub Actions runner + docker CLI"
 LABEL org.opencontainers.image.source="https://github.com/nkg/oci-actions-runner"
