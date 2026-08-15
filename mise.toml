@@ -5,4 +5,4 @@
 [tools]
 shellcheck = "0"
 hadolint = "2"
-lefthook = "1"
+lefthook = "2"
