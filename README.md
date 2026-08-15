@@ -42,12 +42,32 @@ The container's entrypoint reads these env vars at start time:
 |---|---|---|---|
 | `RUNNER_URL` | yes | — | `https://github.com/{owner}/{repo}` (repo-scoped) or `https://github.com/{owner}` (org-scoped) |
 | `RUNNER_TOKEN` | yes | — | Single-use registration token from GitHub (or via gha-nomad-dispatcher) |
+| `RUNNER_REMOVE_TOKEN` | no | — | **Removal** token, used to deregister on SIGTERM. A different credential from `RUNNER_TOKEN` — see below. |
 | `RUNNER_LABELS` | no | `self-hosted,linux` | Comma-separated runner labels |
 | `RUNNER_NAME` | no | `$HOSTNAME` | Display name in GitHub |
 | `RUNNER_GROUP` | no | `default` | Runner group name |
 | `RUNNER_EPHEMERAL` | no | `true` | `true` → register with `--ephemeral` |
 | `RUNNER_WORK_DIR` | no | `_work` | Working directory for jobs |
 | `EXTRA_RUNNER_ARGS` | no | — | Appended verbatim to `config.sh` (advanced) |
+
+### Registration vs removal tokens
+
+GitHub issues these as two distinct, single-use credentials.
+`RUNNER_TOKEN` registers the runner and is consumed by `config.sh`
+during startup; deregistering afterwards needs a *removal* token from
+a different API endpoint (`gha-token-server` exposes it as
+`/remove-token`).
+
+For the normal ephemeral case you don't need one: with
+`RUNNER_EPHEMERAL=true` (the default, and what the dispatcher sets)
+GitHub retires the registration itself once the single job finishes,
+and the entrypoint says so on shutdown rather than attempting a
+removal that would fail.
+
+Set `RUNNER_REMOVE_TOKEN` only for **long-lived** runners
+(`RUNNER_EPHEMERAL=false`), where nothing else cleans up the
+registration and a killed container would otherwise linger as an
+offline runner in the GitHub UI.
 
 The container expects a docker-compatible socket to be mounted at
 `/var/run/docker.sock` for jobs that `docker build` / `docker run` /
