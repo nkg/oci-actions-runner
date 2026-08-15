@@ -4,7 +4,7 @@ pre-commit:
   parallel: true
   commands:
     shellcheck:
-      glob: "**/*.sh"
+      glob: "{,**/}*.sh"
       run: shellcheck {staged_files}
 
     hadolint:

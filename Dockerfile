@@ -13,8 +13,17 @@
 
 FROM debian:13-slim AS builder
 
-ARG RUNNER_VERSION=2.334.0
+ARG RUNNER_VERSION=2.336.0
 ARG TARGETARCH=amd64
+
+# SHA256 of the upstream release tarballs, published by actions/runner
+# in the release body. Both arches are listed because this image is
+# built multi-arch; the build picks the one matching TARGETARCH.
+#
+# When bumping RUNNER_VERSION, refresh BOTH hashes from:
+#   https://github.com/actions/runner/releases/tag/v<RUNNER_VERSION>
+ARG RUNNER_SHA256_AMD64=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
+ARG RUNNER_SHA256_ARM64=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -23,17 +32,21 @@ RUN apt-get update \
 
 WORKDIR /stage
 
-# GitHub Actions runner. SHA verification ensures we land on the
-# exact bits upstream published — protects against a transient mirror
-# swap or an upstream tag-rewrite (which has happened in the past).
+# GitHub Actions runner, verified against the SHA256 upstream
+# published for this exact version. Protects against a transient
+# mirror swap or an upstream tag-rewrite (which has happened before).
+# The build fails closed: an unexpected hash aborts the layer.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) RUNNER_ARCH=x64;; \
-      arm64) RUNNER_ARCH=arm64;; \
+      amd64) RUNNER_ARCH=x64;   RUNNER_SHA256="${RUNNER_SHA256_AMD64}";; \
+      arm64) RUNNER_ARCH=arm64; RUNNER_SHA256="${RUNNER_SHA256_ARM64}";; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1;; \
     esac; \
     curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o runner.tar.gz \
       "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"; \
+    echo "${RUNNER_SHA256}  runner.tar.gz" > runner.tar.gz.sha256; \
+    sha256sum -c runner.tar.gz.sha256; \
+    rm runner.tar.gz.sha256; \
     mkdir -p /stage/runner; \
     tar -xzf runner.tar.gz -C /stage/runner; \
     rm runner.tar.gz
@@ -54,7 +67,7 @@ FROM debian:13-slim
 # Set pipefail so `curl ... | gpg --dearmor` failures propagate.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG RUNNER_VERSION=2.334.0
+ARG RUNNER_VERSION=2.336.0
 LABEL org.opencontainers.image.title="oci-actions-runner"
 LABEL org.opencontainers.image.description="Minimal Debian + GitHub Actions runner + docker CLI"
 LABEL org.opencontainers.image.source="https://github.com/nkg/oci-actions-runner"

@@ -8,6 +8,10 @@
 #                                  or https://github.com/{owner}
 #   RUNNER_TOKEN     (required)  single-use registration token from
 #                                  GitHub (or token-server / dispatcher)
+#   RUNNER_REMOVE_TOKEN (optional) removal token, used to deregister on
+#                                  SIGTERM. This is a DIFFERENT
+#                                  credential from RUNNER_TOKEN — see
+#                                  the cleanup() comment below.
 #   RUNNER_LABELS    (optional)  comma-separated labels (default:
 #                                  "self-hosted,linux")
 #   RUNNER_NAME      (optional)  defaults to the container hostname
@@ -27,6 +31,7 @@ set -euo pipefail
 : "${RUNNER_TOKEN:?RUNNER_TOKEN is required}"
 
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,linux}"
+RUNNER_REMOVE_TOKEN="${RUNNER_REMOVE_TOKEN:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
 RUNNER_GROUP="${RUNNER_GROUP:-default}"
 RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-true}"
@@ -56,11 +61,19 @@ fi
 # shellcheck disable=SC2206  # word-splitting EXTRA_RUNNER_ARGS is intentional
 extra_args=( ${EXTRA_RUNNER_ARGS} )
 
-echo "[entrypoint] registering runner ${RUNNER_NAME} against ${RUNNER_URL}"
-./config.sh "${config_args[@]}" "${extra_args[@]}"
-
-# Graceful shutdown: on SIGTERM (Nomad kill, container stop), deregister
-# the runner so GitHub doesn't show a ghost offline runner.
+# Graceful shutdown: on SIGTERM (Nomad kill, container stop),
+# deregister the runner so GitHub doesn't show a ghost offline runner.
+#
+# Deregistration needs a *removal* token, which is a different
+# credential from the registration token in RUNNER_TOKEN — and the
+# registration token is single-use, already spent by config.sh below.
+# Passing it to `config.sh remove` (as this script used to) always
+# fails. Supply RUNNER_REMOVE_TOKEN — e.g. from gha-token-server's
+# /remove-token endpoint — to make shutdown deregistration work.
+#
+# With RUNNER_EPHEMERAL=true (the default, and what the dispatcher
+# sets) GitHub retires the registration itself after the single job,
+# so a removal token is only needed for long-lived runners.
 #
 # Disable covers two rules fired on trap-invoked code:
 #   SC2329 — "function is never invoked" (called via trap)
@@ -68,17 +81,35 @@ echo "[entrypoint] registering runner ${RUNNER_NAME} against ${RUNNER_URL}"
 #            for every line inside; newer ones recognise the trap)
 # shellcheck disable=SC2317,SC2329
 cleanup() {
-  echo "[entrypoint] SIGTERM received — deregistering runner"
-  ./config.sh remove --token "${RUNNER_TOKEN}" || true
+  if [[ -n "${RUNNER_REMOVE_TOKEN}" ]]; then
+    echo "[entrypoint] SIGTERM received — deregistering runner"
+    ./config.sh remove --token "${RUNNER_REMOVE_TOKEN}" \
+      || echo "[entrypoint] warning: deregistration failed" >&2
+  elif [[ "${RUNNER_EPHEMERAL}" == "true" ]]; then
+    echo "[entrypoint] SIGTERM received — ephemeral runner, GitHub retires the registration on its own"
+  else
+    echo "[entrypoint] SIGTERM received — no RUNNER_REMOVE_TOKEN set;" \
+         "runner will linger as offline in GitHub until removed" >&2
+  fi
   exit 0
 }
+
+# Installed before registration: a SIGTERM arriving mid-`config.sh`
+# was previously unhandled, because the trap was only set afterwards.
 trap cleanup SIGTERM SIGINT
+
+echo "[entrypoint] registering runner ${RUNNER_NAME} against ${RUNNER_URL}"
+./config.sh "${config_args[@]}" "${extra_args[@]}"
 
 echo "[entrypoint] starting runner"
 ./run.sh &
 runner_pid=$!
-wait "${runner_pid}"
-exit_code=$?
+
+# `wait` yields the child's exit status. Under `set -e` a non-zero
+# status aborts the script at this line, which would skip the log
+# below — so capture it explicitly instead of reading $? afterwards.
+exit_code=0
+wait "${runner_pid}" || exit_code=$?
 
 # With --ephemeral, the runner exits cleanly after one job. The
 # Nomad job is `type = "batch"`, so a clean exit ends the allocation.
