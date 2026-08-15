@@ -6,5 +6,13 @@
 #            versions so security updates roll in naturally. Pinning
 #            every package version would freeze CVEs into the image.
 
+#   DL3066 — non-numeric USER. The `runner` user is created inside
+#            this image at a fixed uid/gid (1001), so it always
+#            resolves; and tests/container-structure-test.yaml asserts
+#            the metadata user by *name*. Switching to `USER 1001`
+#            would trade readability for a check that doesn't apply to
+#            a self-contained image.
+
 ignored:
   - DL3008
+  - DL3066
