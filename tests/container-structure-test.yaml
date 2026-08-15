@@ -35,11 +35,42 @@ commandTests:
     args: ["--version"]
     expectedOutput: ["tini version"]
 
+  # The README promises passwordless sudo. It previously installed the
+  # package without a sudoers entry, so `sudo` failed for the runner
+  # user — documented behaviour that didn't exist. `-n` fails rather
+  # than prompting, so this asserts NOPASSWD specifically.
+  - name: runner has passwordless sudo
+    command: sudo
+    args: ["-n", "id", "-u"]
+    expectedOutput: ["^0$"]
+
+  # The runner agent is .NET and won't start without ICU. The package
+  # name changes with every Debian ICU bump, so this guards the
+  # build-time resolution rather than a hardcoded version.
+  - name: ICU runtime present for the .NET-based runner agent
+    command: bash
+    args: ["-c", "ldconfig -p | grep -c libicuuc"]
+    excludedOutput: ["^0$"]
+
+  # Only one init should be installed. dumb-init was carried alongside
+  # tini for a while, unused and undocumented as such.
+  - name: dumb-init is not installed
+    command: bash
+    args: ["-c", "command -v dumb-init || echo absent"]
+    expectedOutput: ["absent"]
+
 fileExistenceTests:
   - name: entrypoint installed
     path: /usr/local/bin/entrypoint.sh
     shouldExist: true
     permissions: -rwxr-xr-x
+
+  # sudo refuses to run at all if any sudoers file is group- or
+  # world-writable, so the mode is part of the contract, not a detail.
+  - name: sudoers drop-in has the mode sudo requires
+    path: /etc/sudoers.d/runner
+    shouldExist: true
+    permissions: -r--r-----
 
   - name: runner agent installed
     path: /home/runner/runner/config.sh
