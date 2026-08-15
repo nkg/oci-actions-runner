@@ -35,11 +35,51 @@ commandTests:
     args: ["--version"]
     expectedOutput: ["tini version"]
 
+  # These assert on a distinctive token rather than on the raw output.
+  # container-structure-test matches with Go regexp, where `$` anchors
+  # to end-of-TEXT, not end-of-line — so `^0$` never matches a command
+  # whose output is "0\n". That made an earlier `excludedOutput:
+  # ["^0$"]` check vacuous: it passed whether or not the thing it
+  # guarded was true. Emitting an explicit token keeps the assertion
+  # honest regardless of trailing whitespace.
+
+  # The README promises passwordless sudo. The package was previously
+  # installed with no sudoers entry, so `sudo` failed for the runner
+  # user — documented behaviour that didn't exist. `-n` fails rather
+  # than prompting, so this asserts NOPASSWD specifically, and the uid
+  # comparison proves it actually reached root.
+  - name: runner has passwordless sudo
+    command: bash
+    args: ["-c", 'test "$(sudo -n id -u)" = 0 && echo SUDO_IS_ROOT']
+    expectedOutput: ["SUDO_IS_ROOT"]
+
+  # The runner agent is .NET and won't start without ICU. The package
+  # name changes with every Debian ICU bump, so this guards the
+  # build-time resolution rather than a hardcoded version.
+  - name: ICU runtime present for the .NET-based runner agent
+    command: bash
+    args: ["-c", "ldconfig -p | grep -q libicuuc && echo ICU_PRESENT"]
+    expectedOutput: ["ICU_PRESENT"]
+
+  # Only one init should be installed. dumb-init was carried alongside
+  # tini for a while, unused and undocumented as such.
+  - name: dumb-init is not installed
+    command: bash
+    args: ["-c", "command -v dumb-init >/dev/null && echo FOUND || echo NOT_FOUND"]
+    expectedOutput: ["NOT_FOUND"]
+
 fileExistenceTests:
   - name: entrypoint installed
     path: /usr/local/bin/entrypoint.sh
     shouldExist: true
     permissions: -rwxr-xr-x
+
+  # sudo refuses to run at all if any sudoers file is group- or
+  # world-writable, so the mode is part of the contract, not a detail.
+  - name: sudoers drop-in has the mode sudo requires
+    path: /etc/sudoers.d/runner
+    shouldExist: true
+    permissions: -r--r-----
 
   - name: runner agent installed
     path: /home/runner/runner/config.sh

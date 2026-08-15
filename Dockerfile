@@ -78,13 +78,26 @@ LABEL org.opencontainers.image.version="${RUNNER_VERSION}"
 # `actions/checkout` over SSH, ca-certs for outbound TLS, curl + git
 # + jq because virtually every workflow uses them.
 #
-# `dumb-init` reaps zombies + forwards SIGTERM cleanly when the
-# runner exits — without it, the ephemeral cleanup hangs ~5s waiting
-# for the kernel to reap orphaned children.
+# `tini` is the init: it reaps zombies and forwards SIGTERM cleanly
+# when the runner exits — without it, the ephemeral cleanup hangs ~5s
+# waiting for the kernel to reap orphaned children.
+#
 # Add Docker's apt repo + GPG key, then install all packages in one
-# shot. Repo codename pinned to `bookworm` (Debian 12) because
-# Docker's repo doesn't yet ship a `trixie` component as of writing;
-# the CLI binary works fine across Debian versions (pure Go).
+# shot. The repo codename is taken from the base image's os-release
+# rather than hardcoded, so it tracks automatically when the `FROM`
+# tag is bumped instead of silently pointing at the previous release.
+#
+# libicu is resolved at build time rather than pinned. The runner
+# agent is .NET and needs ICU, but Debian renames the package on every
+# ICU bump (libicu72 -> 76 -> ...), so a literal name is a build break
+# waiting for the next base-image bump. Upstream's own
+# installdependencies.sh walks a fallback list for exactly this
+# reason; picking the highest available libicuNN is the same idea
+# without hardcoding a list that also goes stale. The result is
+# re-filtered through grep rather than trusting apt-cache's regex
+# dialect, so libicu-dev / libicu76-dbg / libicu-le-hb0 can't be
+# selected, and an empty result fails the build rather than producing
+# an image whose runner agent won't start.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -95,26 +108,46 @@ RUN apt-get update \
       https://download.docker.com/linux/debian/gpg \
       | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
  && chmod a+r /etc/apt/keyrings/docker.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
+ && . /etc/os-release \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
       > /etc/apt/sources.list.d/docker.list \
  && apt-get update \
+ && ICU_PKG="$(apt-cache search --names-only '^libicu[0-9]+$' \
+      | awk '{print $1}' | grep -E '^libicu[0-9]+$' | sort -V | tail -1)" \
+ && if [ -z "${ICU_PKG}" ]; then echo "no libicuNN package available" >&2; exit 1; fi \
+ && echo "using ICU package: ${ICU_PKG}" \
  && apt-get install -y --no-install-recommends \
       bash \
       docker-ce-cli \
-      dumb-init \
       git \
       jq \
       openssh-client \
       sudo \
       tini \
-      libicu76 \
+      "${ICU_PKG}" \
  && rm -rf /var/lib/apt/lists/*
 
 # Non-root runner user matching the upstream convention.
+#
+# Passwordless sudo, matching GitHub's hosted runners — workflows
+# routinely `sudo apt-get install` a build dependency, and without a
+# sudoers entry the `sudo` package installed above does nothing at
+# all. This is not the privilege boundary it might look like: the
+# container is handed the host's podman/docker socket, so any job that
+# can run here can already obtain host root through it. Withholding
+# sudo would break ordinary workflows without changing that.
+#
+# Written with `install -m 0440`, and validated with `visudo -c`, so a
+# malformed file fails the build rather than at first `sudo` call —
+# sudo refuses to run at all if any sudoers file is group/world
+# writable or syntactically invalid.
 RUN groupadd --gid 1001 runner \
  && useradd --uid 1001 --gid runner --shell /bin/bash --create-home runner \
  && mkdir -p /home/runner/_work \
- && chown -R runner:runner /home/runner
+ && chown -R runner:runner /home/runner \
+ && echo 'runner ALL=(ALL) NOPASSWD:ALL' \
+      | install -m 0440 -o root -g root /dev/stdin /etc/sudoers.d/runner \
+ && visudo -c -f /etc/sudoers.d/runner
 
 # Runner agent → /home/runner/runner (owned by runner uid).
 COPY --from=builder --chown=runner:runner /stage/runner /home/runner/runner

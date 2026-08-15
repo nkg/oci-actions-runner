@@ -13,7 +13,7 @@ single job.
 |---|---|
 | Base | `debian:13-slim` |
 | Init | `tini` (signal forwarding + zombie reaping) |
-| Runtime | bash, ca-certs, curl, dumb-init, git, jq, openssh-client, sudo |
+| Runtime | bash, ca-certs, curl, git, jq, openssh-client, sudo, ICU (for the .NET-based agent) |
 | Container CLI | `docker-ce-cli` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
 | User | `runner` (uid 1001) |
@@ -147,23 +147,59 @@ inside the runner.
 
 ### `tini` for signal handling
 
-Without `tini` (or `dumb-init`), the runner agent's spawned children
-leak as zombies and `SIGTERM` from Nomad takes ~5s to propagate
-through to the agent. `tini` reaps + forwards in single-digit
-milliseconds.
+Without an init, the runner agent's spawned children leak as zombies
+and `SIGTERM` from Nomad takes ~5s to propagate through to the agent.
+`tini` reaps + forwards in single-digit milliseconds.
 
-### Pinned runner + docker versions
+`tini` is the only init installed. `dumb-init` was carried alongside
+it for a while — unused, since the `ENTRYPOINT` has always been
+`tini` — and has been dropped.
 
-Both `RUNNER_VERSION` and `DOCKER_CLI_VERSION` are build args with
-explicit defaults. Bumping is a deliberate edit + tag.
+### Pinned, checksum-verified runner agent
+
+`RUNNER_VERSION` is a build arg with an explicit default, paired with
+`RUNNER_SHA256_AMD64` / `RUNNER_SHA256_ARM64`. The downloaded tarball
+is verified before extraction, so an unexpected hash fails the build.
+Bumping means editing the version *and* both hashes, taken from the
+[release page](https://github.com/actions/runner/releases).
+
+The docker CLI is **not** version-pinned: it comes from Docker's apt
+repo, so security updates roll in when the image is rebuilt. Pin the
+image tag, not the CLI, if you need byte-for-byte reproducibility.
 
 ### Non-root runner user
 
 The agent runs as uid 1001, not root. This is upstream's
-recommendation and matches GitHub-hosted runner behaviour. If a
-workflow genuinely needs root inside the container (rare), it can
-`sudo` — `sudo` is installed without a password requirement (the
-runner user is in the sudoers file with NOPASSWD).
+recommendation and matches GitHub-hosted runner behaviour. Workflows
+that need root inside the container can `sudo` without a password —
+`/etc/sudoers.d/runner` grants the runner user `NOPASSWD:ALL`, the
+same as GitHub's hosted runners.
+
+That is deliberately not treated as a privilege boundary. The
+container is handed the host's podman/docker socket, so a job that can
+run here can already obtain host root through it; withholding sudo
+would break ordinary workflows without changing what a job can reach.
+If you need that boundary, it has to come from not mounting the socket
+(see the `sysbox` / rootless-docker roadmap item), not from sudo.
+
+### ICU is resolved at build time, not pinned
+
+The runner agent is .NET and won't start without ICU, but Debian
+renames the package on every ICU major bump (`libicu72` → `libicu76` →
+…). The Dockerfile selects the highest `libicuNN` available in the
+base image's apt sources instead of naming one, so bumping the `FROM`
+tag doesn't break the build. An empty result fails the build rather
+than producing an image whose agent won't start.
+
+### Docker repo codename follows the base image
+
+The Docker apt repo line takes its suite from the base image's
+`/etc/os-release` rather than a hardcoded codename. It was previously
+pinned to `bookworm` on a `trixie` base — harmless while it lasted,
+since the CLI is a static Go binary, but it silently kept the image on
+the previous release's packages. Docker now publishes a `trixie`
+component, and deriving the codename means the next base bump tracks
+automatically.
 
 ## Roadmap
 
