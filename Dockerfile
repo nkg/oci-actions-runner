@@ -51,6 +51,37 @@ RUN set -eux; \
     tar -xzf runner.tar.gz -C /stage/runner; \
     rm runner.tar.gz
 
+# mise, pinned and checksum-verified for the same reason the runner
+# agent is. The upstream one-liner (`curl https://mise.jdx.dev/install.sh
+# | sh`) takes whatever is current when the layer is built, which makes
+# the toolchain manager's version a function of build date rather than
+# of this file — two hosts on one image tag then run different mise
+# releases and nothing reports it. See README, "Pinned,
+# checksum-verified mise".
+#
+# Language runtimes are deliberately NOT installed here: mise is the
+# manager, and workflows install what they pin at job time.
+#
+# When bumping MISE_VERSION, refresh BOTH hashes from
+#   https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/SHASUMS256.txt
+ARG MISE_VERSION=2026.9.1
+ARG MISE_SHA256_AMD64=063dda9149ab6be53da877c2d176afe0eac68e64cf8ca295bd0528720701c65d
+ARG MISE_SHA256_ARM64=98d2ea7b82dd966afdb8a9f4e9edbca771acf2a30d2842bfc0efdb7b61c886a3
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) MISE_ARCH=x64;   MISE_SHA256="${MISE_SHA256_AMD64}";; \
+      arm64) MISE_ARCH=arm64; MISE_SHA256="${MISE_SHA256_ARM64}";; \
+      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1;; \
+    esac; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o mise.tar.gz \
+      "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz"; \
+    echo "${MISE_SHA256}  mise.tar.gz" > mise.tar.gz.sha256; \
+    sha256sum -c mise.tar.gz.sha256; \
+    rm mise.tar.gz.sha256; \
+    tar -xzf mise.tar.gz -C /stage; \
+    rm mise.tar.gz
+
 # Docker CLI: installed from Docker's upstream apt repo in the final
 # stage. Tried docker.io (Debian's package) first — on trixie the
 # binary lands somewhere $PATH doesn't see, and the container-structure
@@ -73,6 +104,13 @@ LABEL org.opencontainers.image.description="Minimal Debian + GitHub Actions runn
 LABEL org.opencontainers.image.source="https://github.com/nkg/oci-actions-runner"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.version="${RUNNER_VERSION}"
+
+# Restated in the final stage so `docker inspect` answers "which mise is
+# in this image" without running it. Diagnosing the drift this pin ends
+# meant reading a mise version out of a job's error output, because
+# nothing else stated it.
+ARG MISE_VERSION=2026.9.1
+LABEL dev.nkg.mise.version="${MISE_VERSION}"
 
 # Minimal runtime — bash for the entrypoint, openssh-client for
 # `actions/checkout` over SSH, ca-certs for outbound TLS, curl + git
@@ -151,6 +189,33 @@ RUN groupadd --gid 1001 runner \
 
 # Runner agent → /home/runner/runner (owned by runner uid).
 COPY --from=builder --chown=runner:runner /stage/runner /home/runner/runner
+
+# mise, from the builder stage.
+#
+# /mise is the install root for anything a job asks mise for. It must
+# exist and be owned by the runner user before the image drops to
+# USER runner, or the first `mise install` at job time fails with
+# EACCES on a directory root owns.
+#
+# /mise/shims goes FIRST on PATH so a tool a job installs is runnable
+# immediately, without `mise exec` — which is what makes `mise install
+# node@22 && node --version` behave the way workflows already assume.
+#
+# Shims-first has a known sharp edge: a shim whose tool is gone shadows
+# a real binary of that name anywhere else on PATH, and fails in the
+# tool's voice rather than mise's. That bites when the mise root
+# accumulates across jobs. It does not bite here, because this image is
+# built for per-job ephemeral containers: /mise is baked empty and
+# starts empty every job. Anything reusing a container across jobs owns
+# that risk and should reset /mise between them.
+COPY --from=builder /stage/mise/bin/mise /usr/local/bin/mise
+
+ENV MISE_DATA_DIR=/mise
+ENV MISE_CONFIG_DIR=/mise
+ENV PATH="/mise/shims:${PATH}"
+
+RUN mkdir -p /mise \
+ && chown runner:runner /mise
 
 # Entrypoint reads RUNNER_URL / RUNNER_TOKEN / RUNNER_LABELS /
 # RUNNER_EPHEMERAL from env at start-time and shells the agent.
