@@ -35,6 +35,32 @@ commandTests:
     args: ["--version"]
     expectedOutput: ["tini version"]
 
+  # The EXACT version, not a loose pattern. A `\d+\.\d+`-style match
+  # here is what let an unpinned mise drift across rebuilds while the
+  # test stayed green — it asserted "some mise", which was never in
+  # doubt. Bumping MISE_VERSION in the Dockerfile must fail this test
+  # until it is edited too, so the pin cannot move by accident.
+  - name: mise present at the pinned version
+    command: mise
+    args: ["--version"]
+    expectedOutput: ["2026\\.9\\.1 linux-"]
+
+  # /mise is created root-owned and handed to the runner user in the
+  # Dockerfile. Without that chown the image still builds, still passes
+  # `mise --version`, and fails the first real job with EACCES.
+  - name: mise data dir is writable by the runner user
+    command: bash
+    args: ["-c", "touch /mise/.probe && echo MISE_DIR_WRITABLE"]
+    expectedOutput: ["MISE_DIR_WRITABLE"]
+
+  # Shims must PRECEDE the system bins, not merely appear on PATH:
+  # a job that installs its own node expects that node to win over any
+  # system one. Downstream images inherit this ordering.
+  - name: mise shims come first on PATH
+    command: bash
+    args: ["-c", 'case "$PATH" in /mise/shims:*) echo SHIMS_FIRST;; *) echo "PATH=$PATH";; esac']
+    expectedOutput: ["SHIMS_FIRST"]
+
   # These assert on a distinctive token rather than on the raw output.
   # container-structure-test matches with Go regexp, where `$` anchors
   # to end-of-TEXT, not end-of-line — so `^0$` never matches a command

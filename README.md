@@ -16,9 +16,15 @@ single job.
 | Runtime | bash, ca-certs, curl, git, jq, openssh-client, sudo, ICU (for the .NET-based agent) |
 | Container CLI | `docker-ce-cli` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
+| Toolchain manager | `mise` at a pinned version, with `/mise/shims` first on `PATH` (no language runtimes baked) |
 | User | `runner` (uid 1001) |
 
-What's deliberately **not** in the box: Python, Node, Go, language runtimes, build toolchains. Operators FROM this image and add their stack:
+What's deliberately **not** in the box: Python, Node, Go, language
+runtimes, build toolchains. `mise` is present as the *manager* for
+those — jobs run `mise install node@22` and get exactly what they pin —
+but nothing it manages is preinstalled.
+
+Operators FROM this image and add their stack:
 
 ```Dockerfile
 FROM ghcr.io/nkg/oci-actions-runner:v0.1.0
@@ -49,6 +55,29 @@ The container's entrypoint reads these env vars at start time:
 | `RUNNER_EPHEMERAL` | no | `true` | `true` → register with `--ephemeral` |
 | `RUNNER_WORK_DIR` | no | `_work` | Working directory for jobs |
 | `EXTRA_RUNNER_ARGS` | no | — | Appended verbatim to `config.sh` (advanced) |
+
+### Toolchain contract
+
+Workflows may call `mise` directly — `mise install <tool>`, or a bare
+`mise install` against a repo's `mise.toml` — and find the result on
+`PATH` without `mise exec`. Concretely, the image guarantees:
+
+| | |
+|---|---|
+| `mise` | on `PATH` at the version in the `dev.nkg.mise.version` image label |
+| `MISE_DATA_DIR` / `MISE_CONFIG_DIR` | `/mise`, writable by the `runner` user |
+| `PATH` | begins with `/mise/shims` |
+
+This is a contract because consumers cannot discover it by reading
+their own repos: a workflow that calls bare `mise install` reads
+identically whether the image provides mise or not, and fails at the
+first step if it doesn't.
+
+`/mise` is baked **empty**, and this image is meant for per-job
+ephemeral containers, so it starts empty every job. If you reuse a
+container across jobs, reset `/mise` between them — a shim left behind
+by an earlier job shadows the real binary of that name for every later
+one, and fails in that tool's voice rather than mise's.
 
 ### Registration vs removal tokens
 
@@ -195,6 +224,24 @@ Bumping means editing the version *and* both hashes, taken from the
 The docker CLI is **not** version-pinned: it comes from Docker's apt
 repo, so security updates roll in when the image is rebuilt. Pin the
 image tag, not the CLI, if you need byte-for-byte reproducibility.
+
+### Pinned, checksum-verified mise
+
+Same treatment, for a reason worth stating: the upstream one-liner
+(`curl https://mise.jdx.dev/install.sh | sh`) installs whatever is
+current when the layer is built. That makes the version a function of
+build date rather than of any file in the repo — so two hosts on one
+image tag can carry different mise releases, and nothing reports the
+difference. That is not hypothetical; it is why this pin exists.
+
+`MISE_VERSION` is a build arg paired with `MISE_SHA256_AMD64` /
+`MISE_SHA256_ARM64`, verified before extraction. Bumping means editing
+the version, both hashes (from that release's `SHASUMS256.txt`), *and*
+the exact-version assertion in
+`tests/container-structure-test.yaml` — which deliberately matches the
+full version, so the pin cannot move without the test noticing. The
+version is also published as the `dev.nkg.mise.version` image label, so
+`docker inspect` answers "which mise is in here" without running it.
 
 ### Non-root runner user
 
