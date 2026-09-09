@@ -17,6 +17,8 @@ single job.
 | Container CLI | `docker-ce-cli` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
 | Toolchain manager | `mise` at a pinned version, with `/mise/shims` first on `PATH` (no language runtimes baked) |
+| GitHub CLI | `gh` — PR comments, releases, App tokens |
+| Python | system `python3` (no pip/venv/dev headers) |
 | User | `runner` (uid 1001) |
 
 What's deliberately **not** in the box: Python, Node, Go, language
@@ -174,6 +176,26 @@ cosign download sbom "$IMAGE"
 Signatures bind the **digest**, not the tag — a tag can be moved, a
 digest cannot. Pin by digest in production if you want the guarantee
 to hold over time.
+
+## What is deliberately absent
+
+**`build-essential`.** gcc/g++/make/libc-dev is ~200 MB and is a
+*toolchain* — the thing this image asks operators to layer on themselves.
+`mise` is here because it *manages* toolchains and `gh` because talking to
+GitHub is what a GitHub Actions runner does; a C compiler is neither. A job
+that needs one has passwordless sudo and can `apt-get install -y
+build-essential`, or run from an image that `FROM`s this one and bakes it.
+The structure tests assert its absence, so adding it means justifying it
+here rather than quietly growing every consumer's pull.
+
+For scale: `gh` + `python3` together cost **26 MB** (385 MB → 411 MB,
+measured on like-for-like local builds). `build-essential` is roughly an
+order of magnitude more.
+
+**arm64.** Released `linux/amd64` only. Every host that runs this image is
+amd64, and the arm64 variant was broken from its first release — see the
+`TARGETARCH` note in the Dockerfile. The arch selection is correct now, so
+re-enabling it is a one-line change in `release.yml`.
 
 ## Design notes
 

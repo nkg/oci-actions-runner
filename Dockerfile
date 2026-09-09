@@ -14,7 +14,14 @@
 FROM debian:13-slim AS builder
 
 ARG RUNNER_VERSION=2.336.0
-ARG TARGETARCH=amd64
+# NO DEFAULT, deliberately. BuildKit supplies TARGETARCH automatically, but
+# it does NOT override an explicit default — `ARG TARGETARCH=amd64` yields
+# "amd64" even when building for linux/arm64. This carried a default until
+# 2026-09-10, which silently pinned every URL-fetched binary to x86-64
+# while apt packages tracked the real target: the published arm64 image
+# advertised linux/arm64 and contained an x86-64 runner agent that could
+# not execute. Verified both forms against a real arm64 build.
+ARG TARGETARCH
 
 # SHA256 of the upstream release tarballs, published by actions/runner
 # in the release body. Both arches are listed because this image is
@@ -116,6 +123,23 @@ LABEL dev.nkg.mise.version="${MISE_VERSION}"
 # `actions/checkout` over SSH, ca-certs for outbound TLS, curl + git
 # + jq because virtually every workflow uses them.
 #
+# `gh` and `python3` are here for the same reason, learned the hard way.
+# Consumers that run this image DIRECTLY — the Nomad runner pool does,
+# with no derived layer — get exactly what is in it, and a workflow
+# calling `gh pr comment` or a `python3` one-liner reads identically
+# whether the image provides them or not. It fails at the first step if
+# not, and nothing in the workflow's own repo says why. `gh` in
+# particular is what a GitHub Actions runner is for: commenting on PRs,
+# managing releases, minting App tokens.
+#
+# `build-essential` is deliberately NOT here, and that is a judgement,
+# not an oversight. gcc/g++/make/libc-dev is ~200 MB and is a TOOLCHAIN,
+# which is the thing this image asks operators to layer on themselves —
+# unlike mise, which manages toolchains, or gh, which talks to GitHub. A
+# job that needs a C compiler has passwordless sudo and can
+# `apt-get install -y build-essential`, or run from an image that
+# FROMs this one and bakes it. See README, "What is deliberately absent".
+#
 # `tini` is the init: it reaps zombies and forwards SIGTERM cleanly
 # when the runner exits — without it, the ephemeral cleanup hangs ~5s
 # waiting for the kernel to reap orphaned children.
@@ -149,6 +173,12 @@ RUN apt-get update \
  && . /etc/os-release \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
       > /etc/apt/sources.list.d/docker.list \
+ && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+ && chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update \
  && ICU_PKG="$(apt-cache search --names-only '^libicu[0-9]+$' \
       | awk '{print $1}' | grep -E '^libicu[0-9]+$' | sort -V | tail -1)" \
@@ -157,9 +187,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash \
       docker-ce-cli \
+      gh \
       git \
       jq \
       openssh-client \
+      python3 \
       sudo \
       tini \
       "${ICU_PKG}" \
