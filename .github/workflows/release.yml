@@ -36,7 +36,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
       - name: Resolve tag
@@ -75,7 +74,16 @@ jobs:
           push: true
           # amd64 covers x86 fleets; arm64 for the Mac mini side of
           # the lab and ARM-based dev machines.
-          platforms: linux/amd64,linux/arm64
+          # amd64 only. Every host that runs this image is amd64 — the
+          # Nomad clients and the compose fleet — and the Mac mini runs
+          # iOS jobs directly rather than in a container. The arm64
+          # variant was additionally BROKEN from its first release
+          # (x86-64 runner agent inside a linux/arm64 manifest, see the
+          # TARGETARCH note in the Dockerfile), so it was a slow build
+          # producing an artifact that could not have worked and that
+          # nobody pulled. The Dockerfile's arch selection is correct now
+          # and stays, so re-adding arm64 here is a one-line change.
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

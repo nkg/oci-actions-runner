@@ -1,5 +1,13 @@
 schemaVersion: 2.0.0
 
+# Running these LOCALLY on an Apple Silicon Mac: build and test the NATIVE
+# arch. Under colima the VM is aarch64, so `--platform linux/amd64` runs
+# through QEMU, and Go binaries (gh, mise) crash there roughly four times
+# in five with `fatal error: found pointer to free object`. That is a
+# qemu-user/Go problem, not a defect in the image — verified 5/5 native
+# vs 1/5 emulated for the same binary. CI runs on real amd64 and is not
+# affected. A "failure" here that is a Go runtime panic is the emulator.
+
 # Verify the image's runtime contract — the things gha-nomad-dispatcher
 # and downstream operators assume are true when they spawn a container
 # from this image.
@@ -24,6 +32,29 @@ commandTests:
     command: jq
     args: ["--version"]
     expectedOutput: ["jq-"]
+
+  # The Nomad runner pool runs this image directly, so anything a workflow
+  # assumes is present has to be asserted here — there is no derived layer
+  # to catch it, and the failure surfaces in the consumer's repo as a
+  # first-step error with no local explanation.
+  - name: gh present (PR comments, releases, App tokens)
+    command: gh
+    args: ["--version"]
+    expectedOutput: ["gh version"]
+
+  - name: python3 present
+    command: python3
+    args: ["--version"]
+    expectedOutput: ["Python 3"]
+
+  # Asserted ABSENT on purpose. build-essential is a toolchain, which is
+  # what this image asks operators to layer on themselves, and it is
+  # ~200 MB. If someone adds it, this fails and they have to justify it in
+  # the README rather than quietly growing every consumer's pull.
+  - name: build-essential is deliberately absent
+    command: bash
+    args: ["-c", "command -v gcc >/dev/null && echo FOUND || echo NOT_FOUND"]
+    expectedOutput: ["NOT_FOUND"]
 
   - name: openssh client present (checkout-over-SSH workflows)
     command: ssh
