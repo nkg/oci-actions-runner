@@ -13,7 +13,7 @@
 
 FROM debian:13-slim AS builder
 
-ARG RUNNER_VERSION=2.336.0
+ARG RUNNER_VERSION=2.337.0
 # NO DEFAULT, deliberately. BuildKit supplies TARGETARCH automatically, but
 # it does NOT override an explicit default — `ARG TARGETARCH=amd64` yields
 # "amd64" even when building for linux/arm64. This carried a default until
@@ -29,8 +29,22 @@ ARG TARGETARCH
 #
 # When bumping RUNNER_VERSION, refresh BOTH hashes from:
 #   https://github.com/actions/runner/releases/tag/v<RUNNER_VERSION>
-ARG RUNNER_SHA256_AMD64=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
-ARG RUNNER_SHA256_ARM64=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1
+#
+# Keep this CURRENT, not merely working. GitHub forces an agent below its
+# minimum to self-update at registration: the runner downloads the new
+# version, restarts, and re-registers. On a long-lived runner that is a
+# one-off cost. On an EPHEMERAL one it is charged to every job — ~15s
+# here — and it loses the race for the job it was spawned for, because by
+# the time it is back the job has gone to another runner. It then sits
+# "Listening for Jobs" holding a Nomad allocation until the job's own
+# timeout reclaims it.
+#
+# Observed 2026-09-11 on the first real Nomad cutover job: image at
+# 2.336.0, GitHub self-updating it to 2.337.0, one stranded alloc out of
+# three. A lagging pin here is not a stale dependency, it is wasted
+# capacity on every single job.
+ARG RUNNER_SHA256_AMD64=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
+ARG RUNNER_SHA256_ARM64=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -105,7 +119,7 @@ FROM debian:13-slim
 # Set pipefail so `curl ... | gpg --dearmor` failures propagate.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG RUNNER_VERSION=2.336.0
+ARG RUNNER_VERSION=2.337.0
 LABEL org.opencontainers.image.title="oci-actions-runner"
 LABEL org.opencontainers.image.description="Minimal Debian + GitHub Actions runner + docker CLI"
 LABEL org.opencontainers.image.source="https://github.com/nkg/oci-actions-runner"
