@@ -51,7 +51,7 @@ commandTests:
   # toolchain as a .zip and shell out to `unzip` to unpack it. Without it
   # the consumer sees "Unable to locate executable file: unzip" from inside
   # the action, which reads like an action bug rather than a missing
-  # package. ~170 KB installed.
+  # package. ~390 KB installed (measured on the released v0.1.6 image).
   - name: unzip present (setup-* actions unpack .zip toolchains)
     command: unzip
     args: ["-v"]
