@@ -208,6 +208,7 @@ RUN apt-get update \
       python3 \
       sudo \
       tini \
+      unzip \
       "${ICU_PKG}" \
  && rm -rf /var/lib/apt/lists/*
 
