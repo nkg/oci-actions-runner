@@ -1,0 +1,121 @@
+# Opens a PR when actions/runner publishes a release newer than the pin.
+#
+# The agent version has gone stale and broken the fleet three times
+# (2026-08-15, and twice since). It is not a normal dependency: GitHub
+# enforces a minimum and forces an older agent to self-update at
+# registration, which on the per-job Nomad runners is paid by EVERY job
+# and strands an allocation whenever the updated runner loses the race
+# for the job it was spawned for. So the cost of being behind is
+# continuous, not occasional.
+#
+# Renovate could watch a `FROM` tag, but this image deliberately builds
+# the agent from the release tarball rather than layering on
+# ghcr.io/actions/actions-runner: that base is 541.8 MB compressed
+# before any of our additions, against 414.7 MB for this whole image
+# WITH mise, gh, python3 and the docker CLI. Adopting it to gain version
+# tracking would cost roughly 250 MB on every cold pull. This does the
+# same job without that.
+#
+# Renovate also cannot do the part that actually matters here — the two
+# SHA256s. It can bump a version string; it cannot compute the hash of
+# an artefact, so it would open a PR that fails the build until a human
+# finished it. This fetches both from the release body, which is where
+# the Dockerfile already tells you to get them.
+
+name: Bump runner agent
+
+on:
+  schedule:
+    # Weekly. actions/runner ships roughly monthly, and the failure mode
+    # of being a few days late is a slow job, not a broken one.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare the pin against the latest release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current=$(grep -m1 -oE '^ARG RUNNER_VERSION=[0-9.]+' Dockerfile | cut -d= -f2)
+          latest=$(gh api /repos/actions/runner/releases/latest --jq '.tag_name' | sed 's/^v//')
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "latest=${latest}"   >> "$GITHUB_OUTPUT"
+          if [ "${current}" = "${latest}" ]; then
+            echo "up to date at ${current}"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pinned ${current}, latest ${latest}"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rewrite the pin and both checksums
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          body=$(gh api "/repos/actions/runner/releases/tags/v${LATEST}" --jq '.body')
+
+          # The release body carries the hashes between HTML comment
+          # markers, one per artefact. Anchored on the exact filename so
+          # a body that reorders or adds arches cannot shift the match.
+          sha_for() {
+            printf '%s' "$body" \
+              | grep -oE "actions-runner-linux-$1-${LATEST}\.tar\.gz <!-- BEGIN SHA linux-$1 -->[0-9a-f]{64}" \
+              | grep -oE '[0-9a-f]{64}$' | head -1
+          }
+          amd=$(sha_for x64)
+          arm=$(sha_for arm64)
+
+          # Fail loudly rather than write an empty hash: the Dockerfile
+          # fails closed on a mismatch, but a blank value would produce a
+          # confusing build error instead of a clear one here.
+          for v in "$amd" "$arm"; do
+            [ ${#v} -eq 64 ] || { echo "could not read both SHA256s from the release body" >&2; exit 1; }
+          done
+
+          sed -i -E "s/^ARG RUNNER_VERSION=.*/ARG RUNNER_VERSION=${LATEST}/" Dockerfile
+          sed -i -E "s/^ARG RUNNER_SHA256_AMD64=.*/ARG RUNNER_SHA256_AMD64=${amd}/" Dockerfile
+          sed -i -E "s/^ARG RUNNER_SHA256_ARM64=.*/ARG RUNNER_SHA256_ARM64=${arm}/" Dockerfile
+
+          # Assert the edit landed everywhere the version appears — it is
+          # declared in both the builder and the final stage, and updating
+          # only one would ship a mislabelled image.
+          n=$(grep -cE "^ARG RUNNER_VERSION=${LATEST}$" Dockerfile)
+          [ "$n" -eq 2 ] || { echo "expected 2 RUNNER_VERSION lines updated, got ${n}" >&2; exit 1; }
+
+      - name: Open the PR
+        if: steps.check.outputs.needed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ci/runner-agent-${{ steps.check.outputs.latest }}
+          title: "fix: bump the runner agent to ${{ steps.check.outputs.latest }}"
+          commit-message: |
+            fix: bump the runner agent to ${{ steps.check.outputs.latest }}
+
+            Opened by .github/workflows/bump-runner-agent.yml. Version and
+            both SHA256s taken from the actions/runner release body.
+
+            CI verifies them: the Dockerfile fails closed on a hash
+            mismatch, so a green build is proof the tarball is the one
+            GitHub published.
+          body: |
+            `actions/runner` **${{ steps.check.outputs.latest }}** is out; this image pinned **${{ steps.check.outputs.current }}**.
+
+            Version and both arch SHA256s rewritten from the release body.
+
+            **Why this is automated.** An agent below GitHub's minimum is forced to self-update at registration. On the per-job Nomad runners that cost is paid by *every* job, and a runner that loses the race for its job while updating strands a Nomad allocation. Being behind is a continuous cost, not an occasional one — and it has broken the fleet three times.
+
+            **No manual checksum step.** CI is the verification: the Dockerfile fails closed on a mismatch, so a green build proves the tarball is the one GitHub published.
