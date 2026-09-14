@@ -47,6 +47,16 @@ commandTests:
     args: ["--version"]
     expectedOutput: ["Python 3"]
 
+  # erlef/setup-beam, actions/setup-java and friends download their
+  # toolchain as a .zip and shell out to `unzip` to unpack it. Without it
+  # the consumer sees "Unable to locate executable file: unzip" from inside
+  # the action, which reads like an action bug rather than a missing
+  # package. ~170 KB installed.
+  - name: unzip present (setup-* actions unpack .zip toolchains)
+    command: unzip
+    args: ["-v"]
+    expectedOutput: ["UnZip"]
+
   # Asserted ABSENT on purpose. build-essential is a toolchain, which is
   # what this image asks operators to layer on themselves, and it is
   # ~200 MB. If someone adds it, this fails and they have to justify it in
