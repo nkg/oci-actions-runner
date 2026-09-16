@@ -14,7 +14,7 @@ single job.
 | Base | `debian:13-slim` |
 | Init | `tini` (signal forwarding + zombie reaping) |
 | Runtime | bash, ca-certs, curl, git, jq, openssh-client, sudo, unzip, ICU (for the .NET-based agent) |
-| Container CLI | `docker-ce-cli` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
+| Container CLI | `docker-ce-cli` + `docker-compose-plugin` from Docker's upstream apt repo (CLI only, no daemon; talks to whatever docker-compat socket you mount) |
 | Runner | Official `actions/runner` agent at a pinned version |
 | Toolchain manager | `mise` at a pinned version, with `/mise/shims` first on `PATH` (no language runtimes baked) |
 | GitHub CLI | `gh` — PR comments, releases, App tokens |

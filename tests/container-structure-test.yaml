@@ -23,6 +23,19 @@ commandTests:
     args: ["--version"]
     expectedOutput: ["Docker version"]
 
+  # Asserted separately from the CLI because `docker --version` passes
+  # without it, which is how this went unnoticed: `docker compose` is a
+  # plugin binary, and without it the CLI treats `compose` as an unknown
+  # command. A consumer then sees "unknown flag: --env-file" and docker's
+  # usage text on exit 125 -- a message that names the flag, not the
+  # missing package, and so reads like a bad workflow rather than a
+  # partial image. It cost sproncy/sproncy-workspace a CI re-run on every
+  # PR, on whichever runs landed on this pool.
+  - name: docker compose plugin present
+    command: docker
+    args: ["compose", "version"]
+    expectedOutput: ["Docker Compose version"]
+
   - name: git present (actions/checkout requirement)
     command: git
     args: ["--version"]
