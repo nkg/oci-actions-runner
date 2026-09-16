@@ -201,6 +201,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash \
       docker-ce-cli \
+      docker-compose-plugin \
       gh \
       git \
       jq \
