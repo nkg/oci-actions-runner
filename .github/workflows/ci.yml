@@ -32,7 +32,18 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck entrypoint.sh
+          shellcheck entrypoint.sh tests/*.sh
+
+  entrypoint-shutdown:
+    name: entrypoint shutdown path
+    # Needs a real procfs (the watchdog scans /proc for Runner.Worker)
+    # but no docker: the entrypoint shells out to config.sh and run.sh,
+    # so stubbing those is enough. Runs beside the linters rather than
+    # after the image build for that reason.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: tests/entrypoint-shutdown-test.sh
 
   build-and-test:
     name: build + container-structure-test

@@ -43,7 +43,19 @@ RUNNER_WORK_DIR="${RUNNER_WORK_DIR:-_work}"
 EXTRA_RUNNER_ARGS="${EXTRA_RUNNER_ARGS:-}"
 RUNNER_IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-0}"
 
-cd /home/runner/runner
+# Overridable only so tests/entrypoint-shutdown-test.sh can point the
+# script at stub config.sh/run.sh. Nothing in the image sets it, and
+# the default is the only path production takes.
+RUNNER_DIR="${RUNNER_DIR:-/home/runner/runner}"
+cd "${RUNNER_DIR}"
+
+# Where the idle watchdog looks for a running job. Overridable only so
+# the tests can point it at a fixture directory: the runner container
+# has its own PID namespace, so scanning /proc there sees this runner's
+# processes and nothing else — but a test running on a CI machine would
+# see that machine's real runner agent and conclude a job was in
+# flight. Nothing in the image sets it.
+RUNNER_PROC_DIR="${RUNNER_PROC_DIR:-/proc}"
 
 # Build the config.sh invocation. --unattended is required (no
 # interactive prompts in a container); --replace lets the same
@@ -86,15 +98,35 @@ extra_args=( ${EXTRA_RUNNER_ARGS} )
 #            for every line inside; newer ones recognise the trap)
 # shellcheck disable=SC2317,SC2329
 cleanup() {
+  echo "[entrypoint] SIGTERM received — shutting down"
+
+  # Stop the agent BEFORE deregistering. `config.sh remove` refuses
+  # while the listener is running, so a remove issued first fails with
+  # a message about the runner still being configured — which is how
+  # this looked when it was tried the other way round.
+  #
+  # `wait` rather than a bare kill: the listener needs to finish
+  # unwinding before its registration can be removed, and this trap is
+  # entered from the `wait` below, so the child is still ours to reap.
+  if [[ -n "${runner_pid:-}" ]] && kill -0 "${runner_pid}" 2>/dev/null; then
+    kill -TERM "${runner_pid}" 2>/dev/null || true
+    wait "${runner_pid}" 2>/dev/null || true
+  fi
+
   if [[ -n "${RUNNER_REMOVE_TOKEN}" ]]; then
-    echo "[entrypoint] SIGTERM received — deregistering runner"
+    echo "[entrypoint] deregistering runner"
     ./config.sh remove --token "${RUNNER_REMOVE_TOKEN}" \
       || echo "[entrypoint] warning: deregistration failed" >&2
-  elif [[ "${RUNNER_EPHEMERAL}" == "true" ]]; then
-    echo "[entrypoint] SIGTERM received — ephemeral runner, GitHub retires the registration on its own"
   else
-    echo "[entrypoint] SIGTERM received — no RUNNER_REMOVE_TOKEN set;" \
-         "runner will linger as offline in GitHub until removed" >&2
+    # This used to claim that an ephemeral runner needs no removal
+    # token because "GitHub retires the registration on its own". That
+    # is true only after the runner COMPLETES a job. A listener that is
+    # stopped before claiming its first — which is exactly what the
+    # idle watchdog below does — leaves an offline registration behind.
+    # Measured 2026-09-18 on the sproncy org: 90 offline registrations,
+    # 0 online.
+    echo "[entrypoint] no RUNNER_REMOVE_TOKEN set; if this runner never ran a job" \
+         "its registration will linger as offline in GitHub until removed" >&2
   fi
   exit 0
 }
@@ -132,7 +164,7 @@ runner_pid=$!
 if [[ "${RUNNER_IDLE_TIMEOUT}" =~ ^[0-9]+$ ]] && (( RUNNER_IDLE_TIMEOUT > 0 )); then
   (
     sleep "${RUNNER_IDLE_TIMEOUT}"
-    for f in /proc/[0-9]*/cmdline; do
+    for f in "${RUNNER_PROC_DIR}"/[0-9]*/cmdline; do
       # Guard the glob: if it matches nothing it stays literal, and the
       # redirection below would fail noisily before tr could swallow it.
       # A process can also exit between the glob and the read.
@@ -144,9 +176,18 @@ if [[ "${RUNNER_IDLE_TIMEOUT}" =~ ^[0-9]+$ ]] && (( RUNNER_IDLE_TIMEOUT > 0 )); 
     done
     echo "[entrypoint] no job claimed within ${RUNNER_IDLE_TIMEOUT}s —" \
          "exiting so the allocation is reclaimed"
-    # TERM, not KILL: run.sh unwinds cleanly, so the runner does not
-    # linger in GitHub as an offline registration.
-    kill -TERM "${runner_pid}" 2>/dev/null || true
+    # Signal THIS SCRIPT, not run.sh. Sending TERM straight to the
+    # child stops the agent but bypasses the trap above, so nothing
+    # ever deregisters — the runner lingers as an offline registration
+    # and the container exits 143, which Nomad reports as a failed
+    # allocation for what is a designed reclaim. Going through cleanup
+    # gives one shutdown path, exercised both by the watchdog and by
+    # Nomad's own SIGTERM.
+    #
+    # `$$` is the PID of the script, not of this subshell, which is
+    # what makes this work ($BASHPID would be the subshell). PID 1
+    # ignores signals it has no handler for; this one is trapped.
+    kill -TERM "$$" 2>/dev/null || true
   ) &
   watchdog_pid=$!
   echo "[entrypoint] idle watchdog armed (${RUNNER_IDLE_TIMEOUT}s)"
