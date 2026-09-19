@@ -49,6 +49,14 @@ RUNNER_IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-0}"
 RUNNER_DIR="${RUNNER_DIR:-/home/runner/runner}"
 cd "${RUNNER_DIR}"
 
+# Where the idle watchdog looks for a running job. Overridable only so
+# the tests can point it at a fixture directory: the runner container
+# has its own PID namespace, so scanning /proc there sees this runner's
+# processes and nothing else — but a test running on a CI machine would
+# see that machine's real runner agent and conclude a job was in
+# flight. Nothing in the image sets it.
+RUNNER_PROC_DIR="${RUNNER_PROC_DIR:-/proc}"
+
 # Build the config.sh invocation. --unattended is required (no
 # interactive prompts in a container); --replace lets the same
 # RUNNER_NAME re-register cleanly after a previous instance died.
@@ -156,7 +164,7 @@ runner_pid=$!
 if [[ "${RUNNER_IDLE_TIMEOUT}" =~ ^[0-9]+$ ]] && (( RUNNER_IDLE_TIMEOUT > 0 )); then
   (
     sleep "${RUNNER_IDLE_TIMEOUT}"
-    for f in /proc/[0-9]*/cmdline; do
+    for f in "${RUNNER_PROC_DIR}"/[0-9]*/cmdline; do
       # Guard the glob: if it matches nothing it stays literal, and the
       # redirection below would fail noisily before tr could swallow it.
       # A process can also exit between the glob and the read.

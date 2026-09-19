@@ -29,23 +29,6 @@ ENTRYPOINT="${REPO_ROOT}/entrypoint.sh"
 pass=0
 fail=0
 
-# Preflight. The watchdog stands down if ANY process on the box looks
-# like Runner.Worker, so a stray one — an aborted earlier run of case 4,
-# or a real runner on a shared machine — makes the idle cases fail with
-# three confusing messages about missing deregistration. Say what is
-# actually wrong instead.
-if [[ -r /proc/self/cmdline ]]; then
-  for f in /proc/[0-9]*/cmdline; do
-    [[ -r "${f}" ]] || continue
-    if tr '\0' ' ' < "${f}" 2>/dev/null | grep -q 'Runner\.Worker'; then
-      echo "refusing to run: a Runner.Worker process is already present (${f%/cmdline})."
-      echo "The idle watchdog treats that as a job in flight and will not fire."
-      echo "Clear it first:  pkill -f Runner.Worker"
-      exit 2
-    fi
-  done
-fi
-
 ok() {
   echo "  ok   — $1"
   pass=$((pass + 1))
@@ -67,7 +50,7 @@ bad() {
 # instantly would pass even if cleanup never waited for it.
 make_runner_dir() {
   local dir="$1"
-  mkdir -p "${dir}"
+  mkdir -p "${dir}" "${dir}/proc"
 
   cat > "${dir}/config.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -101,6 +84,7 @@ run_entrypoint() {
   (
     cd "${dir}" || exit 99
     export RUNNER_DIR="${dir}"
+    export RUNNER_PROC_DIR="${dir}/proc"
     export RUNNER_URL="https://github.com/example"
     export RUNNER_TOKEN="stub-registration-token"
     export RUNNER_NAME="stub-runner"
@@ -186,7 +170,8 @@ dir="$(mktemp -d)"
 make_runner_dir "${dir}"
 (
   cd "${dir}" || exit 99
-  export RUNNER_DIR="${dir}" RUNNER_URL="https://github.com/example" \
+  export RUNNER_DIR="${dir}" RUNNER_PROC_DIR="${dir}/proc" \
+         RUNNER_URL="https://github.com/example" \
          RUNNER_TOKEN="stub" RUNNER_IDLE_TIMEOUT=0
   bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1 &
   ep=$!
@@ -214,53 +199,65 @@ rm -rf "${dir}"
 
 # ── 4. a running job is not interrupted ─────────────────────────────
 #
-# The watchdog asks "is a job running NOW" by scanning /proc for
-# Runner.Worker. Needs a real procfs, so it is skipped off-Linux rather
-# than silently passing there.
+# The watchdog asks "is a job running NOW" by scanning the proc
+# directory for Runner.Worker, which the agent forks per job. The
+# fixture below is a cmdline file shaped like the real one — NUL
+# separated, argv[0] the worker binary — so this case needs no live
+# process and behaves identically on Linux and macOS.
 echo "case: a claimed job survives the idle deadline"
-if [[ ! -r /proc/self/cmdline ]]; then
-  echo "  skip — no procfs on $(uname -s); this case runs in CI"
-else
-  dir="$(mktemp -d)"
-  make_runner_dir "${dir}"
-  # run.sh forks a process whose argv[0] is Runner.Worker, which is what
-  # the agent does per job and what the watchdog looks for.
-  cat > "${dir}/run.sh" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "run.sh started" >> "${RUNNER_DIR}/actions.log"
-bash -c 'exec -a "/home/runner/runner/bin/Runner.Worker spawnclient" sleep 30' &
-worker=$!
-sleep 30 &
-child=$!
-trap 'printf "%s\n" "run.sh got SIGTERM" >> "${RUNNER_DIR}/actions.log"; kill "${worker}" "${child}" 2>/dev/null; exit 0' SIGTERM
-wait "${child}"
-STUB
-  chmod +x "${dir}/run.sh"
+dir="$(mktemp -d)"
+make_runner_dir "${dir}"
+mkdir -p "${dir}/proc/1917"
+printf '/home/runner/runner/bin/Runner.Worker\0spawnclient\0' > "${dir}/proc/1917/cmdline"
 
-  (
-    cd "${dir}" || exit 99
-    export RUNNER_DIR="${dir}" RUNNER_URL="https://github.com/example" \
-           RUNNER_TOKEN="stub" RUNNER_IDLE_TIMEOUT=1
-    bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1 &
-    ep=$!
-    sleep 4   # well past the 1s deadline
-    if kill -0 "${ep}" 2>/dev/null; then
-      echo "alive" > "${dir}/state"
-    else
-      echo "dead" > "${dir}/state"
-    fi
-    pkill -f 'Runner.Worker spawnclient' 2>/dev/null
-    kill -TERM "${ep}" 2>/dev/null
-    wait "${ep}" 2>/dev/null
-  )
-
-  if [[ "$(cat "${dir}/state")" == "alive" ]]; then
-    ok "leaves a runner alone while Runner.Worker is present"
+(
+  cd "${dir}" || exit 99
+  export RUNNER_DIR="${dir}" RUNNER_PROC_DIR="${dir}/proc" \
+         RUNNER_URL="https://github.com/example" \
+         RUNNER_TOKEN="stub" RUNNER_IDLE_TIMEOUT=1
+  bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1 &
+  ep=$!
+  sleep 4   # well past the 1s deadline
+  if kill -0 "${ep}" 2>/dev/null; then
+    echo "alive" > "${dir}/state"
   else
-    bad "killed a runner that had a job in flight"
+    echo "dead" > "${dir}/state"
   fi
-  rm -rf "${dir}"
+  kill -TERM "${ep}" 2>/dev/null
+  wait "${ep}" 2>/dev/null
+)
+
+if [[ "$(cat "${dir}/state")" == "alive" ]]; then
+  ok "leaves a runner alone while Runner.Worker is present"
+else
+  bad "killed a runner that had a job in flight"
 fi
+
+if grep -q 'no job claimed within' "${dir}/stdout.log"; then
+  bad "watchdog announced a reclaim despite a job in flight"
+else
+  ok "does not announce a reclaim"
+fi
+rm -rf "${dir}"
+
+# ── 5. an unrelated process does not look like a job ────────────────
+#
+# The counterpart to case 4, and the reason it is not vacuous: some
+# other entry in the proc directory must NOT keep the runner alive.
+echo "case: an unrelated process does not defer the deadline"
+dir="$(mktemp -d)"
+make_runner_dir "${dir}"
+mkdir -p "${dir}/proc/2001"
+printf '/usr/bin/some-other-thing\0--flag\0' > "${dir}/proc/2001/cmdline"
+code="$(run_entrypoint "${dir}" env RUNNER_IDLE_TIMEOUT=1 RUNNER_REMOVE_TOKEN=stub-remove-token)"
+
+if [[ "${code}" == "0" ]] && grep -q 'config.sh remove' "${dir}/actions.log"; then
+  ok "still reclaims when nothing looks like Runner.Worker"
+else
+  bad "exit ${code}; actions.log:
+$(sed 's/^/        /' "${dir}/actions.log")"
+fi
+rm -rf "${dir}"
 
 echo
 echo "${pass} passed, ${fail} failed"
