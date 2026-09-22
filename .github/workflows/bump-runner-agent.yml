@@ -98,7 +98,7 @@ jobs:
 
       - name: Open the PR
         if: steps.check.outputs.needed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: ci/runner-agent-${{ steps.check.outputs.latest }}
           title: "fix: bump the runner agent to ${{ steps.check.outputs.latest }}"
