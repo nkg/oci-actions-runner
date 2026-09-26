@@ -88,6 +88,9 @@ run_entrypoint() {
     export RUNNER_URL="https://github.com/example"
     export RUNNER_TOKEN="stub-registration-token"
     export RUNNER_NAME="stub-runner"
+    # Point the socket-group block at nothing, so these cases do not
+    # depend on whether the CI machine has a docker socket we can write.
+    export DOCKER_SOCKET="${dir}/no-socket"
     "$@" bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1
     echo "$?" > "${dir}/exit_code"
   )
@@ -172,6 +175,7 @@ make_runner_dir "${dir}"
   cd "${dir}" || exit 99
   export RUNNER_DIR="${dir}" RUNNER_PROC_DIR="${dir}/proc" \
          RUNNER_URL="https://github.com/example" \
+         DOCKER_SOCKET="${dir}/no-socket" \
          RUNNER_TOKEN="stub" RUNNER_IDLE_TIMEOUT=0
   bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1 &
   ep=$!
@@ -214,6 +218,7 @@ printf '/home/runner/runner/bin/Runner.Worker\0spawnclient\0' > "${dir}/proc/191
   cd "${dir}" || exit 99
   export RUNNER_DIR="${dir}" RUNNER_PROC_DIR="${dir}/proc" \
          RUNNER_URL="https://github.com/example" \
+         DOCKER_SOCKET="${dir}/no-socket" \
          RUNNER_TOKEN="stub" RUNNER_IDLE_TIMEOUT=1
   bash "${ENTRYPOINT}" > "${dir}/stdout.log" 2>&1 &
   ep=$!

@@ -44,6 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: tests/entrypoint-shutdown-test.sh
+      # Socket-group block: stubbed sudo and a real unix socket, still no
+      # docker. Kept beside the shutdown test since both drive the same
+      # entrypoint against stub config.sh/run.sh.
+      - run: tests/entrypoint-socket-test.sh
 
   build-and-test:
     name: build + container-structure-test
