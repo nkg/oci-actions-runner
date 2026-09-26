@@ -13,3 +13,10 @@ on:
 jobs:
   lint:
     uses: nkg/github-actions/.github/workflows/lint-workflows.yml@v3
+    # Public repo: stay on GitHub-hosted runners. The reusable defaults to
+    # the self-hosted pool since v3.6.0, which (a) has no runner serving
+    # nkg/* repos, so the job queues forever, and (b) would run fork PRs on
+    # self-hosted hardware -- the hazard the reusable itself warns about.
+    # Hosted minutes are free for public repos.
+    with:
+      runs-on: '["ubuntu-latest"]'
