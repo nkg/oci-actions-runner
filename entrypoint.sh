@@ -23,6 +23,9 @@
 #                                  before giving up and exiting. Unset
 #                                  or 0 disables it. See the watchdog
 #                                  below for why this exists.
+#   DOCKER_SOCKET    (optional)  docker-compatible socket jobs talk to
+#                                  (default: /var/run/docker.sock). See
+#                                  the socket-group block below.
 #   EXTRA_RUNNER_ARGS (optional) appended verbatim to config.sh
 #
 # This script is *intentionally tiny* — the upstream actions/runner
@@ -30,6 +33,59 @@
 # self-cleanup. We're just shelling it with the right flags.
 
 set -euo pipefail
+
+# Socket group: make the mounted socket usable by the runner user.
+#
+# The dispatcher mounts the host's rootful podman socket here, and podman
+# creates it root:root 0660. The agent runs as `runner` (uid 1001), which
+# is in neither, so EVERY job step that touches docker failed with
+# "permission denied while trying to connect to the docker API" — while
+# the rest of the job ran fine, which is what made it look like the
+# job's fault. Observed 2026-09-26 on sproncy-secrets-deploy's compose
+# integration job, the first docker-using job routed to this pool.
+#
+# The fix is group membership, not a chmod: the socket is a bind mount,
+# so loosening its mode here would loosen it on the host for everyone.
+# Supplementary groups are fixed when a process starts, so adding the
+# group is not enough on its own — the script re-executes itself through
+# sudo, which re-reads group membership (initgroups) for the new process,
+# and the agent it starts inherits it.
+#
+# This grants nothing new. Holding this socket already means host root,
+# and `runner` already has passwordless sudo (see the Dockerfile) — this
+# only spends that sudo once, up front, instead of leaving every job to
+# discover it needs `sudo docker`.
+#
+# The cleaner fix is the runtime adding the group itself (podman/Nomad
+# `group_add = ["<socket gid>"]`), after which -w is already true and
+# this block does nothing. Where sudo is unavailable (e.g. the container
+# runs with no-new-privileges) it says so and carries on: registering a
+# runner whose docker steps fail beats not registering one at all.
+DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
+if [[ -S "${DOCKER_SOCKET}" && ! -w "${DOCKER_SOCKET}" \
+      && -z "${_ENTRYPOINT_SOCKET_GROUP_DONE:-}" ]]; then
+  sock_gid="$(stat -c %g "${DOCKER_SOCKET}")"
+  me="$(id -un)"
+  if sudo -n true 2>/dev/null; then
+    sock_group="$(getent group "${sock_gid}" | cut -d: -f1 || true)"
+    if [[ -z "${sock_group}" ]]; then
+      sudo -n groupadd --gid "${sock_gid}" docker-host
+      sock_group=docker-host
+    fi
+    sudo -n usermod -aG "${sock_group}" "${me}"
+    echo "[entrypoint] ${DOCKER_SOCKET} is not writable by ${me};" \
+         "added ${me} to group ${sock_group} (gid ${sock_gid}) and re-executing"
+    # PATH is passed explicitly because sudo's secure_path would otherwise
+    # replace it and drop /mise/shims, which the toolchain contract puts
+    # first. The guard variable stops a second pass if the socket is still
+    # not writable (e.g. an ACL or SELinux label is what's refusing us).
+    exec sudo -n -E -u "${me}" -- env "PATH=${PATH}" \
+      _ENTRYPOINT_SOCKET_GROUP_DONE=1 "$0" "$@"
+  fi
+  echo "[entrypoint] warning: ${DOCKER_SOCKET} (gid ${sock_gid}) is not writable by ${me}" \
+       "and sudo is unavailable; docker steps will fail. Add the socket's group to the" \
+       "container (e.g. podman/Nomad group_add = [\"${sock_gid}\"])." >&2
+fi
 
 : "${RUNNER_URL:?RUNNER_URL is required}"
 : "${RUNNER_TOKEN:?RUNNER_TOKEN is required}"

@@ -57,6 +57,7 @@ The container's entrypoint reads these env vars at start time:
 | `RUNNER_EPHEMERAL` | no | `true` | `true` → register with `--ephemeral` |
 | `RUNNER_WORK_DIR` | no | `_work` | Working directory for jobs |
 | `EXTRA_RUNNER_ARGS` | no | — | Appended verbatim to `config.sh` (advanced) |
+| `DOCKER_SOCKET` | no | `/var/run/docker.sock` | Socket jobs use; if not writable, the entrypoint joins its group (see below) |
 
 ### Toolchain contract
 
@@ -105,6 +106,15 @@ The container expects a docker-compatible socket to be mounted at
 `docker compose`. Under the dispatcher's Nomad job spec this is the
 host's podman socket (`/run/podman/podman.sock`). Under a real
 Docker host, dockerd's socket works the same.
+
+A rootful podman socket is `root:root 0660`, which the `runner` user
+(uid 1001) cannot open. If the mounted socket is not writable, the
+entrypoint adds `runner` to the socket's group via sudo and re-executes
+itself, so jobs can use `docker` without `sudo`. Override the path with
+`DOCKER_SOCKET`. The cleaner fix is for the runtime to add the group
+(podman/Nomad `group_add = ["<socket gid>"]`); the entrypoint then
+leaves it alone. Without sudo (e.g. `no-new-privileges`) it logs a
+warning naming that fix and registers anyway.
 
 ## Quick local test
 
