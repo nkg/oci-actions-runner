@@ -261,6 +261,13 @@ COPY --from=builder /stage/mise/bin/mise /usr/local/bin/mise
 ENV MISE_DATA_DIR=/mise
 ENV MISE_CONFIG_DIR=/mise
 ENV PATH="/mise/shims:${PATH}"
+# GitHub-hosted runners export ImageOS (e.g. ubuntu24-x64); self-hosted
+# runners do not. erlef/setup-beam, and some setup-node / setup-go
+# variants, abort at startup without it: "Tried to map a target OS from
+# env. variable 'ImageOS' (got undefined)". The value is a compatibility
+# token those actions map to a prebuilt download, not a distro claim —
+# they check that it is set, they do not inspect the host.
+ENV ImageOS=ubuntu24
 
 RUN mkdir -p /mise \
  && chown runner:runner /mise

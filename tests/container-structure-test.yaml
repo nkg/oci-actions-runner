@@ -175,6 +175,9 @@ fileExistenceTests:
     isExecutableBy: owner
 
 metadataTest:
+  envVars:
+    - key: ImageOS
+      value: ubuntu24
   user: "runner"
   workdir: "/home/runner"
   entrypoint:
