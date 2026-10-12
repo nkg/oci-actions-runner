@@ -13,7 +13,7 @@
 
 FROM debian:13-slim AS builder
 
-ARG RUNNER_VERSION=2.337.0
+ARG RUNNER_VERSION=2.338.0
 # NO DEFAULT, deliberately. BuildKit supplies TARGETARCH automatically, but
 # it does NOT override an explicit default — `ARG TARGETARCH=amd64` yields
 # "amd64" even when building for linux/arm64. This carried a default until
@@ -43,8 +43,8 @@ ARG TARGETARCH
 # 2.336.0, GitHub self-updating it to 2.337.0, one stranded alloc out of
 # three. A lagging pin here is not a stale dependency, it is wasted
 # capacity on every single job.
-ARG RUNNER_SHA256_AMD64=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
-ARG RUNNER_SHA256_ARM64=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
+ARG RUNNER_SHA256_AMD64=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
+ARG RUNNER_SHA256_ARM64=628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -119,7 +119,7 @@ FROM debian:13-slim
 # Set pipefail so `curl ... | gpg --dearmor` failures propagate.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG RUNNER_VERSION=2.337.0
+ARG RUNNER_VERSION=2.338.0
 LABEL org.opencontainers.image.title="oci-actions-runner"
 LABEL org.opencontainers.image.description="Minimal Debian + GitHub Actions runner + docker CLI"
 LABEL org.opencontainers.image.source="https://github.com/nkg/oci-actions-runner"
